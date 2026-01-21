@@ -84,7 +84,7 @@ async def start(message: Message):
         await message.answer("Админ панель активна.", reply_markup=admin_kb)
     else:
         await message.answer(
-            "Отправляй отчёт:\n"
+            "Отправляй отчёт вот пример для сдачи отчетов:\n"
             "Готово 12\n"
             "или\n"
             "Выходной 12"
@@ -170,10 +170,10 @@ async def user_handler(message: Message):
 
     if "выход" in text:
         data["statuses"][str(num)] = "off"
-        await message.answer("Отмечено как {Выходной}.")
+        await message.answer("Здраствуйте, отчет сдан вы получили Выходной.")
     else:
         data["statuses"][str(num)] = "ready"
-        await message.answer("Ты сдал отчёт. ✅")
+        await message.answer("Здраствуйте, вы сдали отчет.")
 
     data["submitted_users"].append(uid)
     save_data(data)
@@ -184,3 +184,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
