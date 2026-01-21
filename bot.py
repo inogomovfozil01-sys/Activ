@@ -1,198 +1,148 @@
 import json
 import re
-import asyncio
-import logging
-from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-from aiogram.filters import Command
-from aiogram.client.default import DefaultBotProperties
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 with open("config.json", "r", encoding="utf-8") as f:
     config = json.load(f)
 
 TOKEN = config["token"]
 ADMINS = config["admins"]
-DATA_FILE = "data.json"
 
-logging.basicConfig(level=logging.INFO)
+bot = Bot(token=TOKEN)
+dp = Dispatcher(bot)
 
-bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-dp = Dispatcher()
+def load_state():
+    with open("state.json", "r", encoding="utf-8") as f:
+        return json.load(f)
 
-def default_data():
-    return {
+def save_state(data):
+    with open("state.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def reset_state():
+    data = {
         "active": False,
         "list": [],
         "statuses": {},
         "submitted_users": [],
         "admin_state": None
     }
+    save_state(data)
+    return data
 
-def load_data():
-    try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        data = default_data()
-        save_data(data)
-        return data
+def is_admin(user_id):
+    return user_id in ADMINS
 
-def save_data(data):
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+def format_list(data):
+    text = ""
+    for i, link in enumerate(data["list"], start=1):
+        status = data["statuses"].get(str(i), "")
+        text += f"{status}{i}. {link}\n\n"
+    return text
 
-def is_admin(uid):
-    return uid in ADMINS
+admin_kb = ReplyKeyboardMarkup(resize_keyboard=True)
+admin_kb.add(KeyboardButton("Завершить поток"))
 
-def render_list(data, final=False):
-    lines = []
-    for i, item in enumerate(data["list"], 1):
-        status = data["statuses"].get(str(i))
-        icon = ""
-        if status == "ready":
-            icon = "✅"
-        elif status == "off":
-            icon = "🌙"
-        elif final and not status:
-            icon = "❌"
-        lines.append(f"{icon} {i}. {item}".strip())
-    return "\n\n".join(lines)
+@dp.message_handler(commands=["start"])
+async def start(message: types.Message):
+    await message.answer(
+        "Привет.\n"
+        "Если активного потока нет – ты получишь соответствующее сообщение.\n"
+        "Для отчета пиши: Готово 12\n"
+        "Для выходного: Выходной 12"
+    )
 
-admin_kb = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="➕ Создать новый список")],
-        [KeyboardButton(text="📋 Показать текущий список")],
-        [KeyboardButton(text="🛠 Изменить статус")],
-        [KeyboardButton(text="❌ Удалить пункт")],
-        [KeyboardButton(text="📤 Выдать итоговый список")],
-        [KeyboardButton(text="🔒 Закончить поток")],
-        [KeyboardButton(text="🧹 Полный сброс")]
-    ],
-    resize_keyboard=True
-)
+@dp.message_handler(commands=["help"])
+async def help_cmd(message: types.Message):
+    await message.answer(
+        "Команды:\n"
+        "Готово 12 – сдать отчет\n"
+        "Выходной 12 – отметить выходной\n\n"
+        "Если нет активного списка → бот сообщит."
+    )
 
-@dp.message(Command("start"))
-async def start(message: Message):
-    if is_admin(message.from_user.id):
-        await message.answer("Админ-панель активна", reply_markup=admin_kb)
-    else:
-        await message.answer(
-            "Отправляй:\n"
-            "Готово <номер>\n"
-            "Выходной <номер>\n\n"
-            "Пример:\nГотово 1"
-        )
-
-@dp.message(F.from_user.id.in_(ADMINS))
-async def admin_handler(message: Message):
-    data = load_data()
-    text = message.text.strip()
-
-    if text == "➕ Создать новый список":
-        data.update(default_data())
-        data["active"] = True
-        save_data(data)
-        await message.answer("Отправь список пунктов, каждый с новой строки")
+@dp.message_handler(lambda m: is_admin(m.from_user.id) and not load_state()["active"])
+async def admin_send_list(message: types.Message):
+    links = re.findall(r'https?://t\.me/\S+', message.text)
+    if not links:
         return
 
-    if text == "📋 Показать текущий список":
-        await message.answer(render_list(data) or "Список пуст")
+    data = reset_state()
+    data["active"] = True
+    data["list"] = links
+    data["statuses"] = {}
+    data["submitted_users"] = []
+    save_state(data)
+
+    await message.answer(
+        "Поток запущен.\nТекущий список:\n\n" + format_list(data),
+        reply_markup=admin_kb
+    )
+
+@dp.message_handler(lambda m: m.text == "Завершить поток" and is_admin(m.from_user.id))
+async def finish_flow(message: types.Message):
+    data = load_state()
+    if not data["active"]:
+        await message.answer("Нет активного потока.")
         return
 
-    if text == "📤 Выдать итоговый список":
-        await message.answer(render_list(data, final=True) or "Список пуст")
-        return
+    for i in range(1, len(data["list"]) + 1):
+        if str(i) not in data["statuses"]:
+            data["statuses"][str(i)] = "❌ "
 
-    if text == "🔒 Закончить поток":
-        data["active"] = False
-        save_data(data)
-        await message.answer("Поток закрыт.\n\n" + (render_list(data, final=True) or "Список пуст"))
-        return
+    data["active"] = False
+    save_state(data)
 
-    if text == "🧹 Полный сброс":
-        data = default_data()
-        save_data(data)
-        await message.answer("Система полностью сброшена")
-        return
+    await message.answer("Поток завершён.\n\n" + format_list(data))
 
-    if text == "❌ Удалить пункт":
-        data["admin_state"] = "delete"
-        save_data(data)
-        await message.answer("Отправь номер пункта для удаления")
-        return
+    for user_id in data["submitted_users"]:
+        pass
 
-    if text == "🛠 Изменить статус":
-        data["admin_state"] = "set_status"
-        save_data(data)
-        await message.answer("Формат:\nномер ready/off\nПример:\n2 ready")
-        return
-
-    state = data.get("admin_state")
-
-    if data["active"] and not data["list"]:
-        items = [x.strip() for x in message.text.split("\n") if x.strip()]
-        data["list"] = items
-        data["admin_state"] = None
-        save_data(data)
-        await message.answer("Список создан:\n\n" + render_list(data))
-        return
-
-    if state == "delete":
-        if text.isdigit():
-            num = int(text)
-            if 1 <= num <= len(data["list"]):
-                data["list"].pop(num - 1)
-                data["statuses"].pop(str(num), None)
-                data["admin_state"] = None
-                save_data(data)
-                await message.answer("Пункт удалён")
-        return
-
-    if state == "set_status":
-        parts = text.split()
-        if len(parts) == 2:
-            num, st = parts
-            if num.isdigit() and st in ["ready", "off"]:
-                data["statuses"][num] = st
-                data["admin_state"] = None
-                save_data(data)
-                await message.answer("Статус обновлён")
-        return
-
-@dp.message()
-async def user_handler(message: Message):
-    data = load_data()
-    text = message.text.lower()
-    uid = message.from_user.id
+@dp.message_handler()
+async def user_handler(message: types.Message):
+    data = load_state()
 
     if not data["active"]:
+        await message.answer("На данный момент нету потока.")
         return
 
-    if uid in data["submitted_users"]:
-        await message.answer("Ты уже отправлял статус")
+    text = message.text.lower()
+    number = re.findall(r'\d+', text)
+
+    if not number:
         return
 
-    match = re.search(r"\d+", text)
-    if not match:
+    num = number[0]
+
+    if num not in map(str, range(1, len(data["list"]) + 1)):
         return
 
-    num = int(match.group())
-    if not (1 <= num <= len(data["list"])):
+    user_id = message.from_user.id
+
+    if user_id in data["submitted_users"]:
+        await message.answer("Ты уже отправлял отчет. Повторно нельзя.")
+        return
+
+    if "выходн" in text:
+        data["statuses"][num] = "{Выходной} "
+        data["submitted_users"].append(user_id)
+        save_state(data)
+
+        await message.answer("Тебе поставлен статус {Выходной}.")
+        for admin in ADMINS:
+            await bot.send_message(admin, format_list(data))
         return
 
     if "готов" in text:
-        data["statuses"][str(num)] = "ready"
-    elif "выход" in text:
-        data["statuses"][str(num)] = "off"
-    else:
+        data["statuses"][num] = "✅ "
+        data["submitted_users"].append(user_id)
+        save_state(data)
+
+        await message.answer("Ты сдал отчет. Засчитано.")
+        for admin in ADMINS:
+            await bot.send_message(admin, format_list(data))
         return
 
-    data["submitted_users"].append(uid)
-    save_data(data)
-    await message.answer("Принято ✅")
-
-async def main():
-    await dp.start_polling(bot)
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    executor.start_polling(dp, skip_updates=True)
