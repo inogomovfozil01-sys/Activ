@@ -20,7 +20,6 @@ ADMINS = config["admins"]
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-
 def default_data():
     return {
         "active": False,
@@ -32,7 +31,6 @@ def default_data():
         "list_chat_id": None
     }
 
-
 def load_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
@@ -42,46 +40,35 @@ def load_data():
         save_data(data)
         return data
 
-
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
 
-
 def is_admin(uid):
     return uid in ADMINS
-
 
 def render_list(data, final=False):
     lines = []
     for i, item in enumerate(data["list"], 1):
         status = data["statuses"].get(str(i))
-
         icon = ""
         if status == "ready":
             icon = "✅"
         elif status == "off":
             icon = "{Выходной}"
-        elif final and not status:
+        elif status == "fail" or (final and not status):
             icon = "❌"
-
-        line = f"{icon} {i}. {item}".strip()
-        lines.append(line)
-
+        lines.append(f"{icon} {i}. {item}".strip())
     return "\n\n".join(lines)
-
 
 async def update_list_message(data):
     if not data["list_message_id"]:
         return
-
-    text = render_list(data)
     await bot.edit_message_text(
         chat_id=data["list_chat_id"],
         message_id=data["list_message_id"],
-        text=text
+        text=render_list(data)
     )
-
 
 admin_kb = ReplyKeyboardMarkup(
     keyboard=[
@@ -93,32 +80,16 @@ admin_kb = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-
 @dp.message(Command("start"))
 async def start(message: Message):
     if is_admin(message.from_user.id):
         await message.answer("Админ панель активна.", reply_markup=admin_kb)
     else:
-        await message.answer(
-            "Привет.\n"
-            "Отправляй отчёт так:\n\n"
-            "Готово 12\n"
-            "или\n"
-            "Выходной 12\n\n"
-            "Если нет активного потока — бот скажет об этом."
-        )
-
+        await message.answer("Отправляй отчёт:\nГотово 12\nили\nВыходной 12")
 
 @dp.message(Command("help"))
 async def help_cmd(message: Message):
-    await message.answer(
-        "Команды:\n"
-        "/start – запуск\n"
-        "/help – помощь\n\n"
-        "Отчёт принимается даже с ошибками в тексте.\n"
-        "Главное чтобы был номер."
-    )
-
+    await message.answer("Формат отчёта:\nГотово 12\nВыходной 12")
 
 @dp.message(F.from_user.id.in_(ADMINS))
 async def admin_handler(message: Message):
@@ -129,14 +100,11 @@ async def admin_handler(message: Message):
         data = default_data()
         data["active"] = True
         save_data(data)
-        await message.answer("Скинь список пунктов. Каждый с новой строки.")
+        await message.answer("Скинь список пунктов, каждый с новой строки.")
         return
 
     if text == "📋 Показать список":
-        if not data["list"]:
-            await message.answer("Список пуст.")
-        else:
-            await message.answer(render_list(data))
+        await message.answer(render_list(data) if data["list"] else "Список пуст.")
         return
 
     if text == "🧹 Полный сброс":
@@ -147,43 +115,29 @@ async def admin_handler(message: Message):
 
     if text == "📤 Завершить поток":
         data["active"] = False
-
-        # Ставим ❌ тем кто не сдал
         for i in range(1, len(data["list"]) + 1):
             if str(i) not in data["statuses"]:
                 data["statuses"][str(i)] = "fail"
-
         save_data(data)
-
         await update_list_message(data)
-
-        # Рассылка тем кто не сдал
-        for uid in data["submitted_users"]:
-            pass
-
-        await message.answer("Поток завершён.\n\n" + render_list(data, final=True))
+        await message.answer(render_list(data, final=True))
         return
 
-    # если админ скинул список
     if data["active"] and not data["list"]:
         items = []
         for line in text.split("\n"):
             line = line.strip()
             if not line:
                 continue
-            # убираем 1. , 2. , и тд
             line = re.sub(r"^\d+\.\s*", "", line)
             items.append(line)
-
         data["list"] = items
         save_data(data)
-
         msg = await message.answer(render_list(data))
         data["list_message_id"] = msg.message_id
         data["list_chat_id"] = msg.chat.id
         save_data(data)
         return
-
 
 @dp.message()
 async def user_handler(message: Message):
@@ -204,27 +158,26 @@ async def user_handler(message: Message):
         return
 
     num = int(match.group())
-
     if not (1 <= num <= len(data["list"])):
+        return
+
+    if str(num) in data["statuses"]:
+        await message.answer("Этот номер уже подтверждён другим пользователем.")
         return
 
     if "выход" in text:
         data["statuses"][str(num)] = "off"
         await message.answer("Отмечено как {Выходной}.")
     else:
-        # любое другое сообщение с номером считаем готово
         data["statuses"][str(num)] = "ready"
         await message.answer("Ты сдал отчёт. ✅")
 
     data["submitted_users"].append(uid)
     save_data(data)
-
     await update_list_message(data)
-
 
 async def main():
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
