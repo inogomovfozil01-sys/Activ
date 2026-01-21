@@ -72,10 +72,8 @@ async def update_list_message(data):
 
 admin_kb = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="➕ Новый список")],
         [KeyboardButton(text="📋 Показать список")],
-        [KeyboardButton(text="📤 Завершить поток")],
-        [KeyboardButton(text="🧹 Полный сброс")]
+        [KeyboardButton(text="📤 Завершить поток")]
     ],
     resize_keyboard=True
 )
@@ -85,32 +83,32 @@ async def start(message: Message):
     if is_admin(message.from_user.id):
         await message.answer("Админ панель активна.", reply_markup=admin_kb)
     else:
-        await message.answer("Отправляй отчёт:\nГотово 12\nили\nВыходной 12")
+        await message.answer(
+            "Отправляй отчёт:\n"
+            "Готово 12\n"
+            "или\n"
+            "Выходной 12"
+        )
 
 @dp.message(Command("help"))
 async def help_cmd(message: Message):
-    await message.answer("Формат отчёта:\nГотово 12\nВыходной 12")
+    await message.answer(
+        "Пример отчёта:\n"
+        "Готово 5\n"
+        "Выходной 7\n\n"
+        "Если нет активного потока, бот сообщит об этом."
+    )
 
 @dp.message(F.from_user.id.in_(ADMINS))
 async def admin_handler(message: Message):
     data = load_data()
     text = message.text.strip()
 
-    if text == "➕ Новый список":
-        data = default_data()
-        data["active"] = True
-        save_data(data)
-        await message.answer("Скинь список пунктов, каждый с новой строки.")
-        return
-
     if text == "📋 Показать список":
-        await message.answer(render_list(data) if data["list"] else "Список пуст.")
-        return
-
-    if text == "🧹 Полный сброс":
-        data = default_data()
-        save_data(data)
-        await message.answer("Полный сброс выполнен.")
+        if not data["list"]:
+            await message.answer("Сейчас нет активного списка.")
+        else:
+            await message.answer(render_list(data))
         return
 
     if text == "📤 Завершить поток":
@@ -120,24 +118,29 @@ async def admin_handler(message: Message):
                 data["statuses"][str(i)] = "fail"
         save_data(data)
         await update_list_message(data)
-        await message.answer(render_list(data, final=True))
+        await message.answer("Итоговый результат:\n\n" + render_list(data, final=True))
         return
 
-    if data["active"] and not data["list"]:
-        items = []
-        for line in text.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            line = re.sub(r"^\d+\.\s*", "", line)
-            items.append(line)
-        data["list"] = items
-        save_data(data)
-        msg = await message.answer(render_list(data))
-        data["list_message_id"] = msg.message_id
-        data["list_chat_id"] = msg.chat.id
-        save_data(data)
+    items = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^\d+\.\s*", "", line)
+        items.append(line)
+
+    if not items:
         return
+
+    data = default_data()
+    data["active"] = True
+    data["list"] = items
+    save_data(data)
+
+    msg = await message.answer(render_list(data))
+    data["list_message_id"] = msg.message_id
+    data["list_chat_id"] = msg.chat.id
+    save_data(data)
 
 @dp.message()
 async def user_handler(message: Message):
